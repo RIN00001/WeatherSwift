@@ -27,6 +27,14 @@ struct WeatherHomeView: View {
             .navigationTitle("Weather")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink {
+                        BookmarksView(viewModel: viewModel)
+                    } label: {
+                        Image(systemName: "bookmark")
+                    }
+                }
+
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         Task { await viewModel.refresh() }
@@ -93,21 +101,31 @@ struct WeatherHomeView: View {
     private var searchResultsOverlay: some View {
         VStack(spacing: 0) {
             ForEach(viewModel.searchResults, id: \.id) { city in
-                Button {
-                    Task { await viewModel.selectCity(city) }
-                } label: {
-                    HStack {
-                        Image(systemName: "mappin.and.ellipse")
-                            .foregroundStyle(.secondary)
-                        Text(city.fullName)
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.leading)
-                        Spacer()
+                HStack {
+                    Button {
+                        Task { await viewModel.selectCity(city) }
+                    } label: {
+                        HStack {
+                            Image(systemName: "mappin.and.ellipse")
+                                .foregroundStyle(.secondary)
+                            Text(city.fullName)
+                                .foregroundStyle(.primary)
+                                .multilineTextAlignment(.leading)
+                            Spacer()
+                        }
+                        .padding(.vertical, 10)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        Task { await viewModel.addBookmark(for: city) }
+                    } label: {
+                        Image(systemName: viewModel.isBookmarked(city) ? "bookmark.fill" : "bookmark")
+                            .foregroundStyle(viewModel.isBookmarked(city) ? .yellow : .secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
 
                 Divider()
             }

@@ -17,16 +17,25 @@ final class WeatherViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published private(set) var searchResults: [OpenMeteoGeocodingResponse.CityResult] = []
     @Published private(set) var isSearching = false
+    @Published private(set) var bookmarks: [BookmarkedLocation] = []
+    @Published private(set) var bookmarkWeather: [UUID: WeatherSnapshot] = [:]
 
     private let repository: WeatherRepositoryProtocol
     private let locationService: LocationService
+    private let bookmarkStorage: BookmarkStorageProtocol
     private var autoRefreshTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
     private var selectedCity: OpenMeteoGeocodingResponse.CityResult?
 
-    init(repository: WeatherRepositoryProtocol = WeatherRepository(), locationService: LocationService = LocationService()) {
+    init(
+        repository: WeatherRepositoryProtocol = WeatherRepository(),
+        locationService: LocationService = LocationService(),
+        bookmarkStorage: BookmarkStorageProtocol = BookmarkStorageService()
+    ) {
         self.repository = repository
         self.locationService = locationService
+        self.bookmarkStorage = bookmarkStorage
+        self.bookmarks = bookmarkStorage.loadBookmarks()
 
         bindLocation()
         bindSearch()
@@ -36,14 +45,24 @@ final class WeatherViewModel: ObservableObject {
         locationService.authorizationStatus
     }
 
+    var defaultBookmark: BookmarkedLocation? {
+        bookmarks.first(where: { $0.isDefault })
+    }
+
     func onAppear() {
         locationService.requestPermissionIfNeeded()
         if locationService.canUseLocation {
             locationService.requestLocation()
         }
-        startAutoRefresh()
 
-        if weather == nil {
+        startAutoRefresh()
+        Task { await refreshBookmarkedWeather() }
+
+        guard weather == nil else { return }
+
+        if let defaultBookmark {
+            Task { await loadBookmark(defaultBookmark) }
+        } else {
             Task { await loadDefaultCityWeather() }
         }
     }
@@ -55,14 +74,22 @@ final class WeatherViewModel: ObservableObject {
 
     func refresh() async {
         if let location = locationService.lastKnownLocation, locationService.canUseLocation {
-            await loadWeather(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude, cityName: "Current Location")
+            await loadWeather(
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude,
+                cityName: "Current Location"
+            )
         } else if let city = selectedCity {
             await loadWeather(latitude: city.latitude, longitude: city.longitude, cityName: city.fullName)
         } else if let weather {
             await loadWeather(latitude: weather.latitude, longitude: weather.longitude, cityName: weather.cityName)
+        } else if let defaultBookmark {
+            await loadBookmark(defaultBookmark)
         } else {
             await loadDefaultCityWeather()
         }
+
+        await refreshBookmarkedWeather()
     }
 
     func requestLocationRefresh() {
@@ -77,18 +104,73 @@ final class WeatherViewModel: ObservableObject {
         searchResults = []
     }
 
+    func addBookmark(for city: OpenMeteoGeocodingResponse.CityResult) async {
+        guard !isBookmarked(city) else { return }
+
+        let item = BookmarkedLocation(
+            name: city.fullName,
+            latitude: city.latitude,
+            longitude: city.longitude,
+            isDefault: bookmarks.isEmpty
+        )
+        bookmarks.append(item)
+        persistBookmarks()
+        await fetchWeatherForBookmark(item)
+    }
+
+    func removeBookmarks(at offsets: IndexSet) {
+        let removedDefault = offsets.contains { bookmarks[$0].isDefault }
+        let ids = offsets.map { bookmarks[$0].id }
+
+        bookmarks.remove(atOffsets: offsets)
+        ids.forEach { bookmarkWeather[$0] = nil }
+
+        if removedDefault, let first = bookmarks.first {
+            setDefaultBookmark(first)
+        } else {
+            persistBookmarks()
+        }
+    }
+
+    func setDefaultBookmark(_ bookmark: BookmarkedLocation) {
+        bookmarks = bookmarks.map {
+            var mutable = $0
+            mutable.isDefault = mutable.id == bookmark.id
+            return mutable
+        }
+        persistBookmarks()
+    }
+
+    func loadBookmark(_ bookmark: BookmarkedLocation) async {
+        selectedCity = OpenMeteoGeocodingResponse.CityResult(
+            id: Int(abs(bookmark.latitude * 1000 + bookmark.longitude * 1000)),
+            name: bookmark.name,
+            latitude: bookmark.latitude,
+            longitude: bookmark.longitude,
+            country: "",
+            admin1: nil
+        )
+        await loadWeather(latitude: bookmark.latitude, longitude: bookmark.longitude, cityName: bookmark.name)
+    }
+
+    func isBookmarked(_ city: OpenMeteoGeocodingResponse.CityResult) -> Bool {
+        bookmarks.contains(where: { $0.matches(city: city) })
+    }
+
     private func bindLocation() {
         locationService.$lastKnownLocation
             .compactMap { $0 }
             .sink { [weak self] location in
                 guard let self else { return }
                 Task {
-                    self.selectedCity = nil
-                    await self.loadWeather(
-                        latitude: location.coordinate.latitude,
-                        longitude: location.coordinate.longitude,
-                        cityName: "Current Location"
-                    )
+                    if self.defaultBookmark == nil {
+                        self.selectedCity = nil
+                        await self.loadWeather(
+                            latitude: location.coordinate.latitude,
+                            longitude: location.coordinate.longitude,
+                            cityName: "Current Location"
+                        )
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -148,6 +230,29 @@ final class WeatherViewModel: ObservableObject {
         } catch {
             viewState = .error("Could not fetch weather right now. Pull to refresh or try searching for another city.")
         }
+    }
+
+    private func refreshBookmarkedWeather() async {
+        for bookmark in bookmarks {
+            await fetchWeatherForBookmark(bookmark)
+        }
+    }
+
+    private func fetchWeatherForBookmark(_ bookmark: BookmarkedLocation) async {
+        do {
+            let snapshot = try await repository.fetchWeather(
+                latitude: bookmark.latitude,
+                longitude: bookmark.longitude,
+                cityName: bookmark.name
+            )
+            bookmarkWeather[bookmark.id] = snapshot
+        } catch {
+            bookmarkWeather[bookmark.id] = nil
+        }
+    }
+
+    private func persistBookmarks() {
+        bookmarkStorage.saveBookmarks(bookmarks)
     }
 
     private func startAutoRefresh() {

@@ -3,11 +3,29 @@ import Foundation
 @MainActor
 extension WeatherViewModel {
     static var previewLoaded: WeatherViewModel {
-        let viewModel = WeatherViewModel(repository: WeatherRepository(service: PreviewOpenMeteoService()))
+        let previewBookmark = BookmarkedLocation(
+            name: "Tokyo, Japan",
+            latitude: 35.6764,
+            longitude: 139.6500,
+            isDefault: true
+        )
+
+        let viewModel = WeatherViewModel(
+            repository: WeatherRepository(service: PreviewOpenMeteoService()),
+            bookmarkStorage: PreviewBookmarkStorage(initial: [previewBookmark])
+        )
         viewModel.weather = .mock
         viewModel.viewState = .loaded
+        viewModel.bookmarkWeather[previewBookmark.id] = .mock
         return viewModel
     }
+}
+
+private struct PreviewBookmarkStorage: BookmarkStorageProtocol {
+    let initial: [BookmarkedLocation]
+
+    func loadBookmarks() -> [BookmarkedLocation] { initial }
+    func saveBookmarks(_ bookmarks: [BookmarkedLocation]) {}
 }
 
 private struct PreviewOpenMeteoService: OpenMeteoServicing {
