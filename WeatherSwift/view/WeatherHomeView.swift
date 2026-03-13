@@ -47,8 +47,10 @@ struct WeatherHomeView: View {
             .overlay(alignment: .top) {
                 if !viewModel.searchResults.isEmpty {
                     searchResultsOverlay
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+            .animation(.easeInOut(duration: 0.25), value: viewModel.searchResults)
         }
         .onAppear { viewModel.onAppear() }
         .onDisappear { viewModel.onDisappear() }
@@ -60,17 +62,30 @@ struct WeatherHomeView: View {
         case .idle, .loading:
             ProgressView("Loading weather…")
                 .padding(.top, 120)
+                .transition(.opacity)
         case .error(let message):
             ContentUnavailableView("Weather Unavailable", systemImage: "wifi.exclamationmark", description: Text(message))
                 .padding(.top, 80)
+                .transition(.opacity)
         case .empty:
             ContentUnavailableView("No data", systemImage: "cloud")
                 .padding(.top, 80)
+                .transition(.opacity)
         case .loaded:
             if let weather = viewModel.weather {
                 WeatherHeaderCard(snapshot: weather)
+                    .scrollTransition { content, phase in
+                        content
+                            .scaleEffect(phase.isIdentity ? 1 : 0.96)
+                            .opacity(phase.isIdentity ? 1 : 0.78)
+                    }
+
                 WeatherDetailsGrid(snapshot: weather)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.82), value: weather)
+                    .scrollTransition { content, phase in
+                        content
+                            .offset(y: phase.isIdentity ? 0 : 18)
+                            .opacity(phase.isIdentity ? 1 : 0.7)
+                    }
             }
         }
     }
@@ -100,6 +115,7 @@ struct WeatherHomeView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding(.horizontal, horizontalPadding)
         .padding(.top, 8)
+        .shadow(color: .black.opacity(0.08), radius: 10, y: 6)
     }
 
     private var horizontalPadding: CGFloat {
